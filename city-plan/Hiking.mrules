@@ -1,0 +1,48 @@
+features
+	lines
+		roads_trunk : highway=trunk
+		roads_primary : highway=primary 
+		roads_secondary : highway=secondary 
+		roads_tertiary : highway=tertiary
+		other_roads : highway=unclassified OR highway=trunk_link OR highway=primary_link OR highway=residential OR highway=service OR highway=track OR highway=road
+		all lines :
+	areas
+		buildings : building
+		all areas : 
+
+properties
+	map-background-color : #181818
+
+rules
+	target : buildings
+		define
+			fill-color : lightgreen
+			fill-opacity : 0.8
+			border-width : 0%
+			line-style : none
+		draw : fill
+	target : roads_trunk
+		define
+			line-color : lightgray
+			line-width : 1
+		draw : line
+	target : roads_primary
+		define
+			line-color : lightgray
+			line-width : 4
+		draw : line
+	target : roads_secondary
+		define
+			line-color : lightgray
+			line-width : 3
+		draw : line
+	target : roads_tertiary
+		define
+			line-color : lightgray
+			line-width : 2
+		draw : line
+	target : other_roads
+		define
+			line-color : lightgray
+			line-width : 1
+		draw : line

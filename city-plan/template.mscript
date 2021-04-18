@@ -1,0 +1,9 @@
+use-ruleset location=Rules/Hiking.mrules
+set-setting name=map.decoration.grid value=false
+set-setting name=map.decoration.scale value=false
+set-setting name=map.decoration.attribution value=false
+download-osm-overpass bounds=<x1>,<y1>,<x2>,<y2>
+use-ruleset location=Rules/Hiking.mrules
+apply-ruleset
+move-pos y=<y> x=<x> zoom=<zoom>
+export-bitmap <out> width=<width>
