@@ -63,9 +63,12 @@ class SketchGAN(pl.LightningModule):
 
     def __init__(
         self,
-        channels,
-        img_size,
-        num_classes,
+        channels: int,
+        img_size: int,
+        num_classes: int,
+        seed: int,
+        save_root_dir: str = './checkpoints',
+        load_checkpoint: str = None,
         batch_kernel: int = 50,
         lambda_gp: int = 10,
         decay: float = 0.005,
@@ -79,8 +82,13 @@ class SketchGAN(pl.LightningModule):
         **kwargs
     ):
         super().__init__()
+        self.SEED = seed
         self.save_hyperparameters()
-        lambda_gp = 10
+        self.save_root_dir = save_root_dir
+        self.load = False
+
+        if self.save_root_dir is not None and not os.path.exists(self.save_root_dir):
+            os.makedirs(self.save_root_dir)
 
         # networks
         gen_modules = [
@@ -105,12 +113,40 @@ class SketchGAN(pl.LightningModule):
             (1024, 3, 1, 0),
             (128, 0, 0, 0)
         ]
+        
         self.generator = Generator(module_list=gen_modules)
         self.discriminator = Discriminator(
             classes_num=num_classes,  
             cnn_list=disc_modules, 
             batch_size=self.hparams.batch_size,
-            batch_kernel=self.hparams.batch_kernel)
+            batch_kernel=self.hparams.batch_kernel
+        )
+
+        if load_checkpoint is not None:
+            checkpoint_dim = torch.load(
+                f'{self.save_root_dir}/discriminator-{load_checkpoint}'
+            )
+            self.discriminator.load_state_dict(checkpoint_dim['model_state_dict'])
+            self.optimizer_d_state = checkpoint_dim['optimizer_state_dict']
+            epoch_d = checkpoint_dim['epoch']
+            loss_d = checkpoint_dim['loss']
+
+            checkpoint_gen = torch.load(
+                f'{self.save_root_dir}/generator-{load_checkpoint}'
+            )
+            self.generator.load_state_dict(checkpoint_gen['model_state_dict'])
+            self.optimizer_g_state = checkpoint_gen['optimizer_state_dict']
+            epoch_g = checkpoint_gen['epoch']
+            loss_g = checkpoint_gen['loss']
+
+            self.load = True
+            if loss_g > loss_d:
+                current_epoch = loss_g+1
+            else:
+                current_epoch = loss_d+1
+            # TODO set start epoch to current epoch
+            print(f"Last generator loss {loss_g}, last discriminator loss {loss_d} on epoch {current_epoch-1}")
+
 
         self.validation_z = torch.empty((self.hparams.batch_size, self.hparams.latent_dim, 1, 1)).normal_(mean=0.0,std=1.0)
         self.example_input_array = torch.zeros(2, self.hparams.latent_dim, 1, 1)
@@ -186,6 +222,15 @@ class SketchGAN(pl.LightningModule):
             # adversarial loss is binary cross-entropy
             g_loss = -torch.mean(self.discriminator(self(z)).view(-1,1))
             self.log('g_loss', g_loss, on_step=True, on_epoch=True, prog_bar=True)
+            
+            opt = (self.optimizers()[0]).optimizer
+            torch.save({
+                'epoch': self.current_epoch,
+                'model_state_dict': self.generator.state_dict(),
+                'optimizer_state_dict': opt.state_dict(),
+                'loss': g_loss,
+                'seed': self.SEED
+            }, f'{self.save_root_dir}/generator-{self.current_epoch}')
 
         # ---------------------
         #  Train Discriminator
@@ -200,16 +245,26 @@ class SketchGAN(pl.LightningModule):
                 
             noise = torch.empty(imgs.shape).normal_(mean=0.0,std=1.0)*down
             imgs = (imgs+noise).clamp_(-1,1)
+            
             # Real images
             real_validity = self.discriminator(imgs).view(-1,1)
             # Fake images
             fake_validity = self.discriminator(fake_imgs).view(-1,1)
             # Gradient penalty
             gradient_penalty = self.compute_gradient_penalty(imgs.data, fake_imgs.data)
+
             # Adversarial loss
             d_loss = -torch.mean(real_validity) + torch.mean(fake_validity) + self.hparams.lambda_gp * gradient_penalty
-
             self.log('d_loss', d_loss, on_step=True, on_epoch=True, prog_bar=True)
+            
+            opt = (self.optimizers()[1]).optimizer
+            torch.save({
+                'epoch': self.current_epoch,
+                'model_state_dict': self.discriminator.state_dict(),
+                'optimizer_state_dict': opt.state_dict(),
+                'loss': d_loss,
+                'seed': self.SEED
+            }, f'{self.save_root_dir}/discriminator-{self.current_epoch}')
 
     def configure_optimizers(self):
         lr = self.hparams.lr
@@ -218,6 +273,10 @@ class SketchGAN(pl.LightningModule):
 
         opt_g = torch.optim.Adam(self.generator.parameters(), lr=lr, betas=(b1, b2))
         opt_d = torch.optim.Adam(self.discriminator.parameters(), lr=lr, betas=(b1, b2))
+
+        if self.load:
+            opt_d.load_state_dict(self.optimizer_d_state)
+            opt_g.load_state_dict(self.optimizer_g_state)
 
         return (
             {'optimizer': opt_g, 'frequency': 1},
@@ -240,31 +299,31 @@ class SketchGAN(pl.LightningModule):
 
 
 def main(hparams):
+    SEED = 1998
+    pl.seed_everything(SEED)
+
     dm = SketchCityDataModule(img_size=224)
-    model = SketchGAN(**vars(hparams), channels=3, img_size=224, num_classes=1)
+    model = SketchGAN(**vars(hparams), channels=3, img_size=224, num_classes=1, seed=SEED)
     
-    tb_logger = pl_loggers.TensorBoardLogger('logs/')
+    tb_logger = pl_loggers.TensorBoardLogger('./logs/')
     
     trainer = Trainer.from_argparse_args(
         hparams,
-        profiler=True,
+        profiler="simple",
         logger=tb_logger
     )
     
     trainer.fit(model, dm)
 
 if __name__ == '__main__':
-    parser = ArgumentParser()
+    parser = ArgumentParser(description="python3 train.py --log_gpu_memory true --max_epochs=600 --gpus=1")
+    parser.add_argument('--batch_size', default=16, type=int)
+    parser.add_argument('--save_root_dir', type=str, default='./checkpoints')
+    parser.add_argument('--n_critic', type=int, default=5)
+    parser.add_argument('--load_checkpoint', type=str)
     parser = Trainer.add_argparse_args(parser)
     #parser = SketchGAN.add_model_specific_args(parser)
     hparams = parser.parse_args()
-    
-    if hparams.default_root_dir is None:
-        hparams.default_root_dir = './checkpoints/'
-    elif hparams.max_epochs is None:
-        hparams.max_epochs = 5
-    elif hparams.progress_bar_refresh_rate is None:
-        hparams.progress_bar_refresh_rate = 1
     
     main(hparams)
 
