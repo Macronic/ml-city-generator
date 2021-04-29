@@ -28,7 +28,7 @@ class MinibatchDiscrimination(nn.Module):
         self.kernel_dims = kernel_dims
         self.mean = mean
         self.T = nn.Parameter(torch.Tensor(in_features, out_features, kernel_dims))
-        init.normal(self.T, 0, 1)
+        init.normal_(self.T, 0, 1)
 
     def forward(self, x):
         # x is NxA
