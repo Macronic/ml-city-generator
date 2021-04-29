@@ -9,6 +9,7 @@ from torchvision.models.inception import inception_v3
 import numpy as np
 from scipy.stats import entropy
 
+
 def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
     """Computes the inception score of the generated images imgs
     imgs -- Torch dataset of (3xHxW) numpy images normalized in the range [-1, 1]
@@ -22,7 +23,7 @@ def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
     assert N > batch_size
 
     # Set up dtype
-    if cuda:
+    if cuda and torch.cuda.is_available():
         dtype = torch.cuda.FloatTensor
     else:
         if torch.cuda.is_available():

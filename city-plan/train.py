@@ -28,7 +28,7 @@ class SketchCityTrainer():
         img_size: int,
         num_classes: int,
         seed: int,
-        num_workers: int = 8,
+        num_workers: int = 2,
         save_root_dir: str = './checkpoints',
         data_dir: str = './generate/',
         log_dir: str = './logs',
@@ -40,7 +40,7 @@ class SketchCityTrainer():
         latent_dim: int = 100,
         num_epochs = 600,
         lr: float = 0.0002,
-        batch_size: int = 16,
+        batch_size: int = 8,
         sample_interval: int = 400,
         *args, 
         **kwargs
@@ -64,6 +64,7 @@ class SketchCityTrainer():
         
         #set seed
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        print(f'CUDA use? {self.device}')
         
         np.random.seed(self.SEED)
         torch.manual_seed(self.SEED)
@@ -151,7 +152,11 @@ class SketchCityTrainer():
             self.generator = nn.DataParallel(self.generator)
             self.discriminator = nn.DataParallel(self.discriminator)
         
-        self.dists = DISTS()
+        try:
+            self.dists = DISTS()
+        except Exception as e:
+            print(f"Cannot import DISTS problem: {e}")
+            self.dists = None
 
     
     def create_dataset(self, batch_size, img_size, data_dir, num_workers):
@@ -243,8 +248,6 @@ class SketchCityTrainer():
 
                     d_loss.backward()
                     optimizer_D.step()
-                    self.logger.add_scalar('Loss/discriminator', d_loss, save_step)
-
                     optimizer_G.zero_grad()
 
                     # Train the generator every n_critic steps
@@ -266,18 +269,21 @@ class SketchCityTrainer():
 
                         # Prepare inception metrics: FID,IS, DIST, KID
                         fid = calculate_fid(fake_imgs, imgs, False, self.batch_size)
-                        is_mean, is_std = inception_score(fake_imgs, cuda=False, batch_size=int(self.batch_size/2))
+                        is_mean, is_std = inception_score(fake_imgs, cuda=True, batch_size=int(self.batch_size/2))
                         kid_mean, kid_std = calculate_kid(fake_imgs, imgs, self.batch_size)
-                        with torch.no_grad():
-                            dists_value = self.dists(fake_imgs, imgs, require_grad=False, batch_average=True)
-                        
-                        self.logger.add_scalar('dist', dists_value, save_step)
+                        if self.dists is not None:
+                            with torch.no_grad():
+                                dists_value = self.dists(fake_imgs, imgs, require_grad=False, batch_average=True)
+                            self.logger.add_scalar('dist', dists_value, save_step)
+
                         self.logger.add_scalar('IS_mean', is_mean, save_step)
                         self.logger.add_scalar('IS_std', is_std, save_step)
                         self.logger.add_scalar('kid_mean', kid_mean, save_step)
                         self.logger.add_scalar('kid_std', kid_std, save_step)
                         self.logger.add_scalar('fid', fid, save_step)
                         self.logger.add_scalar('Loss/generator', g_loss, save_step)
+                        self.logger.add_scalar('Loss/discriminator', d_loss, save_step)
+
 
                         # log sampled images
                         if batches_done % self.sample_interval == 0:
