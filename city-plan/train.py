@@ -19,6 +19,7 @@ from fid_metric import calculate_fid
 from inception_metric import inception_score
 from kid_metric import calculate_kid
 from DISTS_pytorch import DISTS
+from comet_ml import Experiment
 
 
 class SketchCityTrainer():
@@ -28,7 +29,7 @@ class SketchCityTrainer():
         img_size: int,
         num_classes: int,
         seed: int,
-        num_workers: int = 2,
+        num_workers: int = 8,
         save_root_dir: str = './checkpoints',
         data_dir: str = './generate/',
         log_dir: str = './logs',
@@ -40,8 +41,9 @@ class SketchCityTrainer():
         latent_dim: int = 100,
         num_epochs = 600,
         lr: float = 0.0002,
-        batch_size: int = 8,
+        batch_size: int = 32,
         sample_interval: int = 400,
+        comet: bool = True,
         *args, 
         **kwargs
     ):
@@ -58,6 +60,7 @@ class SketchCityTrainer():
         self.sample_interval = sample_interval
         self.lr = lr
         self.load = False
+        self.comet = False#comet
 
         if self.save_root_dir is not None and not os.path.exists(self.save_root_dir):
             os.makedirs(self.save_root_dir)
@@ -96,6 +99,27 @@ class SketchCityTrainer():
             (128, 0, 0, 0)
         ]
         
+        if self.comet:
+            self.experiment = Experiment(
+                api_key="***REMOVED***",
+                project_name="citygeneration",
+                workspace="wolodja",
+            )
+            self.experiment.log_parameters({
+                "SEED": SEED,
+                "img_shape": self.img_shape,
+                "batch size": self.batch_size,
+                "lambda_gp": self.lambda_gp,
+                "decay": self.decay,
+                "n_critic": self.n_critic,
+                "latent": self.latent_dim,
+                "number of epochs": self.num_epochs,
+                "sample interval": self.sample_interval,
+                "learing rate": self.lr,
+                "disc structure": disc_modules,
+                "gen structure": gen_modules,
+            })
+
         self.generator = Generator(module_list=gen_modules)
         self.discriminator = Discriminator(
             classes_num=num_classes,  
@@ -211,112 +235,243 @@ class SketchCityTrainer():
         batches_done = 0
         save_step = -1
 
-        for epoch in range(self.num_epochs):
-            with tqdm(self.dataloader, unit="batch") as tepoch:
-                for i, (imgs, _) in enumerate(tepoch):
-                    imgs = imgs.to(self.device)
-                    save_step += 1
-                    # ---------------------
-                    #  Train Discriminator
-                    # ---------------------
+        if self.comet:
+            with self.experiment.train():
+                for epoch in range(self.num_epochs):
+                    with tqdm(self.dataloader, unit="batch") as tepoch:
+                        for i, (imgs, _) in enumerate(tepoch):
+                            imgs = imgs.to(self.device)
+                            save_step += 1
+                            # ---------------------
+                            #  Train Discriminator
+                            # ---------------------
 
-                    optimizer_D.zero_grad()
+                            optimizer_D.zero_grad()
 
-                    # Sample noise as generator input
-                    z = torch.empty((imgs.shape[0], self.latent_dim, 1, 1)).normal_(mean=0.0,std=1.0)
-                    z = z.type_as(imgs).to(self.device)
+                            # Sample noise as generator input
+                            z = torch.empty((imgs.shape[0], self.latent_dim, 1, 1)).normal_(mean=0.0,std=1.0)
+                            z = z.type_as(imgs).to(self.device)
 
-                    # Generate a batch of images
-                    fake_imgs = self.generator(z)
+                            # Generate a batch of images
+                            fake_imgs = self.generator(z)
 
-                    #make noise
-                    down = 1-(self.decay*epoch)
-                    if  down < 0 :
-                        down = 0
-                        
-                    noise = torch.empty(imgs.shape).normal_(mean=0.0,std=1.0)*down
-                    imgs = (imgs+noise.to(self.device)).clamp_(-1,1)
+                            #make noise
+                            down = 1-(self.decay*epoch)
+                            if  down < 0 :
+                                down = 0
+                                
+                            noise = torch.empty(imgs.shape).normal_(mean=0.0,std=1.0)*down
+                            imgs = (imgs+noise.to(self.device)).clamp_(-1,1)
 
-                    # Real images
-                    real_validity = self.discriminator(imgs).view(-1,1)
-                    # Fake images
-                    fake_validity = self.discriminator(fake_imgs).view(-1,1)
-                    # Gradient penalty
-                    gradient_penalty = self.compute_gradient_penalty(imgs.data, fake_imgs.data)
-                    # Adversarial loss
-                    d_loss = -torch.mean(real_validity) + torch.mean(fake_validity) + self.lambda_gp * gradient_penalty
+                            # Real images
+                            real_validity = self.discriminator(imgs).view(-1,1)
+                            # Fake images
+                            fake_validity = self.discriminator(fake_imgs).view(-1,1)
+                            # Gradient penalty
+                            gradient_penalty = self.compute_gradient_penalty(imgs.data, fake_imgs.data)
+                            # Adversarial loss
+                            d_loss = -torch.mean(real_validity) + torch.mean(fake_validity) + self.lambda_gp * gradient_penalty
 
-                    d_loss.backward()
-                    optimizer_D.step()
-                    optimizer_G.zero_grad()
+                            d_loss.backward()
+                            optimizer_D.step()
+                            optimizer_G.zero_grad()
 
-                    # Train the generator every n_critic steps
-                    if i % self.n_critic == 0:
+                            # Train the generator every n_critic steps
+                            if i % self.n_critic == 0:
 
-                        # -----------------
-                        #  Train Generator
-                        # -----------------
+                                # -----------------
+                                #  Train Generator
+                                # -----------------
+
+                                # Generate a batch of images
+                                fake_imgs = self.generator(z)
+                                # Loss measures generator's ability to fool the discriminator
+                                # Train on fake images
+                                fake_validity = self.discriminator(fake_imgs).view(-1,1)
+                                g_loss = -torch.mean(fake_validity)
+
+                                g_loss.backward()
+                                optimizer_G.step()
+
+                                # Prepare inception metrics: FID,IS, DIST, KID
+                                fid = calculate_fid(fake_imgs, imgs, False, self.batch_size)
+                                is_mean, is_std = inception_score(fake_imgs, cuda=True, batch_size=int(self.batch_size/2))
+                                kid_mean, kid_std = calculate_kid(fake_imgs, imgs, self.batch_size)
+                                if self.dists is not None:
+                                    with torch.no_grad():
+                                        dists_value = self.dists(fake_imgs, imgs, require_grad=False, batch_average=True)
+                                    self.experiment.log_metric('dist', dists_value, save_step, epoch)
+
+                                self.experiment.log_metric('IS_mean', is_mean, save_step, epoch)
+                                self.experiment.log_metric('IS_std', is_std, save_step, epoch)
+                                self.experiment.log_metric('kid_mean', kid_mean, save_step, epoch)
+                                self.experiment.log_metric('kid_std', kid_std, save_step, epoch)
+                                self.experiment.log_metric('fid', fid, save_step, epoch)
+                                self.experiment.log_metric('Loss/generator', g_loss, save_step, epoch)
+                                self.experiment.log_metric('Loss/discriminator', d_loss, save_step, epoch)
+
+
+                                # log sampled images
+                                if batches_done % self.sample_interval == 0:
+                                    if fake_imgs.shape[0] >= 20:
+                                        sample_imgs = fake_imgs[:20]
+                                    else:
+                                        sample_imgs = fake_imgs
+
+                                    grid = torchvision.utils.make_grid(sample_imgs)
+                                    self.logger.add_image('generated_images', grid, epoch)
+
+                                    if imgs.shape[0] >= 20:
+                                        sample_imgs = imgs[:20]
+                                    else:
+                                        sample_imgs = imgs
+
+                                    grid = torchvision.utils.make_grid(sample_imgs)
+                                    self.logger.add_image('true_images', grid, epoch)
+
+                                #saving
+                                torch.save({
+                                    'epoch': epoch,
+                                    'model_state_dict': self.generator.state_dict(),
+                                    'optimizer_state_dict': optimizer_G.state_dict(),
+                                    'loss': g_loss,
+                                    'seed': self.SEED
+                                }, f'{self.save_root_dir}/generator-{epoch}')
+
+                                torch.save({
+                                    'epoch': epoch,
+                                    'model_state_dict': self.discriminator.state_dict(),
+                                    'optimizer_state_dict': optimizer_D.state_dict(),
+                                    'loss': d_loss,
+                                    'seed': self.SEED
+                                }, f'{self.save_root_dir}/discriminator-{epoch}')
+
+                                tepoch.set_postfix_str(
+                                    f"[Epoch {epoch}] [D loss: {d_loss.item():.5f}] [G loss: {g_loss.item():.5f}]"
+                                )
+
+                                batches_done += self.n_critic
+                
+                #self.experiment.log_embedding(
+                #    vectors,
+                #    labels,
+                #    image_data,
+                #    image_size)
+        else:
+            for epoch in range(self.num_epochs):
+                with tqdm(self.dataloader, unit="batch") as tepoch:
+                    for i, (imgs, _) in enumerate(tepoch):
+                        imgs = imgs.to(self.device)
+                        save_step += 1
+                        # ---------------------
+                        #  Train Discriminator
+                        # ---------------------
+
+                        optimizer_D.zero_grad()
+
+                        # Sample noise as generator input
+                        z = torch.empty((imgs.shape[0], self.latent_dim, 1, 1)).normal_(mean=0.0,std=1.0)
+                        z = z.type_as(imgs).to(self.device)
 
                         # Generate a batch of images
                         fake_imgs = self.generator(z)
-                        # Loss measures generator's ability to fool the discriminator
-                        # Train on fake images
+
+                        #make noise
+                        down = 1-(self.decay*epoch)
+                        if  down < 0 :
+                            down = 0
+                            
+                        noise = torch.empty(imgs.shape).normal_(mean=0.0,std=1.0)*down
+                        imgs = (imgs+noise.to(self.device)).clamp_(-1,1)
+
+                        # Real images
+                        real_validity = self.discriminator(imgs).view(-1,1)
+                        # Fake images
                         fake_validity = self.discriminator(fake_imgs).view(-1,1)
-                        g_loss = -torch.mean(fake_validity)
+                        # Gradient penalty
+                        gradient_penalty = self.compute_gradient_penalty(imgs.data, fake_imgs.data)
+                        # Adversarial loss
+                        d_loss = -torch.mean(real_validity) + torch.mean(fake_validity) + self.lambda_gp * gradient_penalty
 
-                        g_loss.backward()
-                        optimizer_G.step()
+                        d_loss.backward()
+                        optimizer_D.step()
+                        optimizer_G.zero_grad()
 
-                        # Prepare inception metrics: FID,IS, DIST, KID
-                        fid = calculate_fid(fake_imgs, imgs, False, self.batch_size)
-                        is_mean, is_std = inception_score(fake_imgs, cuda=True, batch_size=int(self.batch_size/2))
-                        kid_mean, kid_std = calculate_kid(fake_imgs, imgs, self.batch_size)
-                        if self.dists is not None:
-                            with torch.no_grad():
-                                dists_value = self.dists(fake_imgs, imgs, require_grad=False, batch_average=True)
-                            self.logger.add_scalar('dist', dists_value, save_step)
+                        # Train the generator every n_critic steps
+                        if i % self.n_critic == 0:
 
-                        self.logger.add_scalar('IS_mean', is_mean, save_step)
-                        self.logger.add_scalar('IS_std', is_std, save_step)
-                        self.logger.add_scalar('kid_mean', kid_mean, save_step)
-                        self.logger.add_scalar('kid_std', kid_std, save_step)
-                        self.logger.add_scalar('fid', fid, save_step)
-                        self.logger.add_scalar('Loss/generator', g_loss, save_step)
-                        self.logger.add_scalar('Loss/discriminator', d_loss, save_step)
+                            # -----------------
+                            #  Train Generator
+                            # -----------------
+
+                            # Generate a batch of images
+                            fake_imgs = self.generator(z)
+                            # Loss measures generator's ability to fool the discriminator
+                            # Train on fake images
+                            fake_validity = self.discriminator(fake_imgs).view(-1,1)
+                            g_loss = -torch.mean(fake_validity)
+
+                            g_loss.backward()
+                            optimizer_G.step()
+
+                            # Prepare inception metrics: FID,IS, DIST, KID
+                            fid = calculate_fid(fake_imgs, imgs, False, self.batch_size)
+                            is_mean, is_std = inception_score(fake_imgs, cuda=True, batch_size=int(self.batch_size/2))
+                            kid_mean, kid_std = calculate_kid(fake_imgs, imgs, self.batch_size)
+                            if self.dists is not None:
+                                with torch.no_grad():
+                                    dists_value = self.dists(fake_imgs, imgs, require_grad=False, batch_average=True)
+                                self.logger.add_scalar('dist', dists_value, save_step)
+
+                            self.logger.add_scalar('IS_mean', is_mean, save_step)
+                            self.logger.add_scalar('IS_std', is_std, save_step)
+                            self.logger.add_scalar('kid_mean', kid_mean, save_step)
+                            self.logger.add_scalar('kid_std', kid_std, save_step)
+                            self.logger.add_scalar('fid', fid, save_step)
+                            self.logger.add_scalar('Loss/generator', g_loss, save_step)
+                            self.logger.add_scalar('Loss/discriminator', d_loss, save_step)
 
 
-                        # log sampled images
-                        if batches_done % self.sample_interval == 0:
-                            if fake_imgs.shape[0] >= 20:
-                                sample_imgs = fake_imgs[:20]
-                            else:
-                                sample_imgs = fake_imgs
+                            # log sampled images
+                            if batches_done % self.sample_interval == 0:
+                                if fake_imgs.shape[0] >= 20:
+                                    sample_imgs = fake_imgs[:20]
+                                else:
+                                    sample_imgs = fake_imgs
 
-                            grid = torchvision.utils.make_grid(sample_imgs)
-                            self.logger.add_image('generated_images', grid, epoch)
+                                grid = torchvision.utils.make_grid(sample_imgs)
+                                self.logger.add_image('generated_images', grid, epoch)
 
-                        #saving
-                        torch.save({
-                            'epoch': epoch,
-                            'model_state_dict': self.generator.state_dict(),
-                            'optimizer_state_dict': optimizer_G.state_dict(),
-                            'loss': g_loss,
-                            'seed': self.SEED
-                        }, f'{self.save_root_dir}/generator-{epoch}')
+                                if imgs.shape[0] >= 20:
+                                    sample_imgs = imgs[:20]
+                                else:
+                                    sample_imgs = imgs
 
-                        torch.save({
-                            'epoch': epoch,
-                            'model_state_dict': self.discriminator.state_dict(),
-                            'optimizer_state_dict': optimizer_D.state_dict(),
-                            'loss': d_loss,
-                            'seed': self.SEED
-                        }, f'{self.save_root_dir}/discriminator-{epoch}')
+                                grid = torchvision.utils.make_grid(sample_imgs)
+                                self.logger.add_image('true_images', grid, epoch)
 
-                        tepoch.set_postfix_str(
-                            f"[Epoch {epoch}] [D loss: {d_loss.item():.5f}] [G loss: {g_loss.item():.5f}]"
-                        )
+                            #saving
+                            torch.save({
+                                'epoch': epoch,
+                                'model_state_dict': self.generator.state_dict(),
+                                'optimizer_state_dict': optimizer_G.state_dict(),
+                                'loss': g_loss,
+                                'seed': self.SEED
+                            }, f'{self.save_root_dir}/generator-{epoch}')
 
-                        batches_done += self.n_critic
+                            torch.save({
+                                'epoch': epoch,
+                                'model_state_dict': self.discriminator.state_dict(),
+                                'optimizer_state_dict': optimizer_D.state_dict(),
+                                'loss': d_loss,
+                                'seed': self.SEED
+                            }, f'{self.save_root_dir}/discriminator-{epoch}')
+
+                            tepoch.set_postfix_str(
+                                f"[Epoch {epoch}] [D loss: {d_loss.item():.5f}] [G loss: {g_loss.item():.5f}]"
+                            )
+
+                            batches_done += self.n_critic
         
         self.logger.close()
 
