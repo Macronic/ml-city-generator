@@ -18,8 +18,8 @@ def to_cuda(elements):
     Returns:
         elements: same as input on GPU memory, if available
     """
-    if torch.cuda.is_available():
-        return elements.cuda()
+    #if torch.cuda.is_available():
+    #    return elements.cuda()
     return elements
 
 
@@ -166,7 +166,7 @@ def preprocess_image(im):
     Return:
         im: torch.tensor, shape: (3, 299, 299), dtype: torch.float32 between 0-1
     """
-    im = (im.permute(1,2,0).detach().numpy()+1)/2.0
+    im = (im.permute(1,2,0).cpu().detach().numpy()+1)/2.0
     assert im.shape[2] == 3
     assert len(im.shape) == 3
     if im.dtype == np.uint8:

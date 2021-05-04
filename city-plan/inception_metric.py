@@ -26,8 +26,8 @@ def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
     if cuda and torch.cuda.is_available():
         dtype = torch.cuda.FloatTensor
     else:
-        if torch.cuda.is_available():
-            print("WARNING: You have a CUDA device, so you should probably set cuda=True")
+        #if torch.cuda.is_available():
+            #print("WARNING: You have a CUDA device, so you should probably set cuda=True")
         dtype = torch.FloatTensor
 
     # Set up dataloader

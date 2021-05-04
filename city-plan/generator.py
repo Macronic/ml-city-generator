@@ -11,6 +11,7 @@ class UpBlock(nn.Module):
             layers.append(nn.BatchNorm2d(out_channels))
         if dropuout:
             layers.append(nn.Dropout(p=0.5))
+        #layers.append(nn.LeakyReLU(0.2, inplace=True))
         layers.append(nn.ReLU(True))
         self.main = nn.Sequential(*layers)
     
@@ -32,9 +33,9 @@ class Generator(nn.Module):
                 break
             else:
                 if i % 2 == 0:
-                    dropout= True
+                    dropout= False
                 else:
-                    dropout= True
+                    dropout= False
                 self.main.add_module(
                     f"up_block_{i}",
                     UpBlock(in_features, module_list[i+1][0], kernal, stride, padding, dropout)

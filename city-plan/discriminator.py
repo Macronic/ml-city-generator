@@ -11,7 +11,7 @@ class ConBlock(nn.Module):
         super(ConBlock, self).__init__()
         layers = [nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)]
         if normalize:
-            layers.append(nn.BatchNorm2d(out_channels))
+            layers.append(nn.InstanceNorm2d(out_channels, affine=True))
         if dropuout:
             layers.append(nn.Dropout(p=0.5))
         layers.append(nn.LeakyReLU(0.2, inplace=True))
@@ -53,34 +53,42 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
 
         self.main = nn.Sequential()
-        
-        for i, layer in enumerate(cnn_list):
-            in_features, kernal, stride, padding = layer
-            if i == len(cnn_list)-1:
-                self.main.add_module(
-                    "flatten",
-                    nn.Flatten()
-                )
-                self.main.add_module(
-                    "MiniBatchDiscrimination",
-                     MinibatchDiscrimination(
-                        cnn_list[-1][0],
-                        int(cnn_list[-1][0]/2),
+        self.flatten = nn.Flatten()
+        self.mini_batch = MinibatchDiscrimination(
+                        225,
+                        112,
                         batch_kernel,
                         batch_size
                     )
-                )
-                self.main.add_module(
-                    "conv1_last",
-                    nn.Conv1d(cnn_list[-1][0]+int(cnn_list[-1][0]/2), classes_num, 1)
-                )
-                self.main.add_module("sigmoid", nn.Sigmoid())
+        self.last = nn.Conv1d(337, classes_num, 1)
+        self.sigmoid = nn.Sigmoid()
+        for i, layer in enumerate(cnn_list):
+            in_features, kernal, stride, padding = layer
+            if i == len(cnn_list)-1:
+                #self.main.add_module(
+                #    "flatten",
+                #    nn.Flatten()
+                #)
+                #self.main.add_module(
+                #    "MiniBatchDiscrimination",
+                #     MinibatchDiscrimination(
+                #        cnn_list[-1][0],
+                #        int(cnn_list[-1][0]/2),
+                #        batch_kernel,
+                #        batch_size
+                #    )
+                #)
+                #self.main.add_module(
+                #    "conv1_last",
+                #    nn.Conv1d(cnn_list[-1][0]+int(cnn_list[-1][0]/2), classes_num, 1)
+                #)
+                #self.main.add_module("sigmoid", nn.Sigmoid())
                 break
             else:
                 if i % 2 == 0:
-                    dropout= True
+                    dropout= False
                 else:
-                    dropout= True
+                    dropout= False
 
                 self.main.add_module(
                     f"conv_block_{i}",
@@ -89,6 +97,12 @@ class Discriminator(nn.Module):
 
 
     def forward(self, x):
-        return self.main(x)
+        #print(x.shape)
+        x = self.main(x)
+        #x = self.flatten(x)
+        #x = self.mini_batch(x)
+        #x = self.last(x)
+        #x = self.sigmoid(x)
+        return x
 
 
