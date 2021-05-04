@@ -34,11 +34,11 @@ class SketchCityTrainer():
         data_dir: str = './generate/',
         log_dir: str = './logs',
         load_checkpoint: str = None,
-        batch_kernel: int = 50,
+        #batch_kernel: int = 50,
         lambda_gp: int = 10,
-        decay: float = 0.01,
+        decay: float = 0.005,
         n_critic: int = 5,
-        latent_dim: int = 100,
+        latent_dim: int = 128,#100,
         num_epochs = 200,
         lr: float = 0.0002,
         batch_size: int = 8,
@@ -80,31 +80,6 @@ class SketchCityTrainer():
 
         #dataset
         self.create_dataset(batch_size, img_size, data_dir, num_workers)
-
-        # networks
-        gen_modules = [
-            (self.latent_dim, 4, 1, 0),
-            (2048, 4, 2, 1),
-            (1024, 4, 2, 1),
-            (512, 4, 2, 1),
-            (256, 4, 2, 1),
-            (128, 4, 2, 1),
-            (64, 4, 2, 1),
-            (3, 0, 0, 0)
-            #(16, 1, 1, 1),
-            #(3, 0, 0, 0)
-        ]
-        disc_modules = [
-            (3, 4, 2, 1),
-            #(32, 4, 2, 1),
-            (64, 4, 2, 1),
-            (128, 4, 2, 1),
-            (256, 4, 2, 1),
-            (512, 4, 2, 1),
-            (1024, 4, 2, 1),
-            (2048, 4, 1, 0),
-            (1, 0, 0, 0)
-        ]
         
         if self.comet:
             self.experiment = Experiment(
@@ -127,12 +102,9 @@ class SketchCityTrainer():
                 "gen structure": gen_modules,
             })
 
-        self.generator = Generator(module_list=gen_modules)
+        self.generator = Generator(channels, self.latent_dim)
         self.discriminator = Discriminator(
-            classes_num=num_classes,  
-            cnn_list=disc_modules, 
-            batch_size=batch_size,
-            batch_kernel=batch_kernel
+            channels, self.num_classes
         )
 
         if load_checkpoint is not None:
@@ -161,16 +133,16 @@ class SketchCityTrainer():
             print(f"Last generator loss {loss_g}, last discriminator loss {loss_d} on epoch {current_epoch-1}")
 
 
-        def weights_init(m):
-            classname = m.__class__.__name__
-            if classname.find('Conv') != -1:
-                torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
-            elif classname.find('BatchNorm') != -1:
-                torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
-                torch.nn.init.constant_(m.bias.data, 0)
+        #def weights_init(m):
+        #    classname = m.__class__.__name__
+        #    if classname.find('Conv') != -1:
+        #        torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
+        #    elif classname.find('BatchNorm') != -1:
+        #        torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
+        #        torch.nn.init.constant_(m.bias.data, 0)
         
-        self.generator.apply(weights_init)
-        self.discriminator.apply(weights_init)
+        #self.generator.apply(weights_init)
+        #self.discriminator.apply(weights_init)
         
         self.logger = SummaryWriter(log_dir=log_dir)
         example_inputG_array = torch.zeros(2, self.latent_dim, 1, 1)
@@ -205,7 +177,7 @@ class SketchCityTrainer():
         lr = self.lr
 
         opt_g = torch.optim.Adam(self.generator.parameters(), lr=lr)
-        opt_d = torch.optim.SGD(self.discriminator.parameters(), lr=lr)
+        opt_d = torch.optim.Adam(self.discriminator.parameters(), lr=lr)
 
         if self.load:
             opt_d.load_state_dict(self.optimizer_d_state)
@@ -235,21 +207,29 @@ class SketchCityTrainer():
         return gradient_penalty
     
     def compute_gradient_second_penalty(self, real_samples, fake_samples):
-        eta = torch.FloatTensor(self.batch_size, 1, 1, 1).uniform_(0,1).to(self.device)
-        eta = eta.expand(self.batch_size, real_samples.size(1), real_samples.size(2), real_samples.size(3))
+        eta = torch.FloatTensor(self.batch_size,1,1,1).uniform_(0,1)
+        eta = eta.expand(self.batch_size, real_samples.size(1), real_samples.size(2), real_samples.size(3)).to(self.device)
 
-        interpolates = (eta * real_samples + ((1 - eta) * fake_samples)).to(self.device).requires_grad_(True)
-        d_interpolates = self.discriminator(interpolates)
-        fake = Variable(torch.Tensor(d_interpolates.size()).fill_(1.0), requires_grad=False).to(self.device)
-        gradients = torch.autograd.grad(
-            outputs=d_interpolates,
-            inputs=interpolates,
-            grad_outputs=fake,
-            create_graph=True,
-            retain_graph=True,
-        )[0]
-        
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * self.lambda_gp
+        interpolated = eta * real_samples + ((1 - eta) * fake_samples)
+
+        if self.cuda:
+            interpolated = interpolated.cuda(self.cuda_index)
+        else:
+            interpolated = interpolated
+
+        # define it to calculate gradient
+        interpolated = Variable(interpolated, requires_grad=True)
+
+        # calculate probability of interpolated examples
+        prob_interpolated = self.discriminator(interpolated)
+
+        # calculate gradients of probabilities with respect to examples
+        gradients = autograd.grad(outputs=prob_interpolated, inputs=interpolated,
+                               grad_outputs=torch.ones(
+                                   prob_interpolated.size()).to(self.device),
+                               create_graph=True, retain_graph=True)[0]
+
+        grad_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * self.lambda_gp
         return gradient_penalty
 
     def run(self):
@@ -263,6 +243,10 @@ class SketchCityTrainer():
         optimizer_G, optimizer_D = self.configure_optimizers()
         batches_done = 0
         save_step = -1
+
+        one = torch.tensor(1, dtype=torch.float)
+        mone = one * -1
+
 
         if self.comet:
             with self.experiment.train():
@@ -298,21 +282,23 @@ class SketchCityTrainer():
                             # Real images
                             real_validity = self.discriminator(imgs)
                             real_validity = real_validity.mean()
-                            real_validity.backward()
+                            real_validity.backward(mone)
+
                             # Fake images
                             fake_validity = self.discriminator(fake_imgs)
                             fake_validity = fake_validity.mean()
-                            fake_validity.backward()
+                            fake_validity.backward(one)
+
                             # Gradient penalty
                             gradient_penalty = self.compute_gradient_second_penalty(imgs.data, fake_imgs.data)
-                            # Adversarial loss
                             gradient_penalty.backward()
                             #d_loss = -torch.mean(real_validity) + torch.mean(fake_validity) + self.lambda_gp * gradient_penalty
 
                             #d_loss.backward()
                             d_loss = fake_validity - real_validity + gradient_penalty
-                            optimizer_D.step()
                             wasserstain_d = real_validity - fake_validity
+                            optimizer_D.step()
+                            
                             #optimizer_G.zero_grad()
 
                             # Train the generator every n_critic steps
@@ -332,10 +318,9 @@ class SketchCityTrainer():
                                 # Loss measures generator's ability to fool the discriminator
                                 # Train on fake images
                                 fakes = self.discriminator(fake_imgs)
-                                g_loss = torch.mean(fakes)
+                                g_loss = fakes.mean()
 
-                                g_loss.backward()
-                                g_loss = -g_loss
+                                g_loss.backward(mone)
                                 optimizer_G.step()
 
                                 # Prepare inception metrics: FID,IS, DIST, KID
@@ -397,7 +382,7 @@ class SketchCityTrainer():
 
                                 batches_done += self.n_critic
 
-                    if epoch % self.comet_interval == 0:
+                    if epoch % self.comet_interval == 0 or epoch+1 == self.num_epochs:
                         #saving
                         torch.save({
                                     'epoch': epoch,
@@ -416,30 +401,31 @@ class SketchCityTrainer():
                         }, f'{self.save_root_dir}/discriminator-{epoch}')
 
                 
-                    if fake_imgs.shape[0] >= 5:
-                        sample_imgs = fake_imgs[:5]
-                    else:
-                        sample_imgs = fake_imgs
+                        if fake_imgs.shape[0] >= 5:
+                            sample_imgs = fake_imgs[:5]
+                        else:
+                            sample_imgs = fake_imgs
 
-                    grid = torchvision.utils.make_grid(sample_imgs).permute(1,2,0)
-                    try:
-                        self.experiment.log_image(
-                            image_data=grid,
-                            name="generated_imgs",
-                            image_scale=(64,64)
-                        )
-                    except:
-                        pass
-                    
-                    try:
-                        weights = []
-                        for name in self.generator.named_parameters():
-                            if 'weight' in name[0]:
-                                weight.extend(name[1].detach().numpy().tolist())
+                        grid = torchvision.utils.make_grid(sample_imgs).mul(0.5).add(0.5).permute(1,2,0).cpu().detach().numpy()
+                        print(grid.shape)
+                        try:
+                            self.experiment.log_image(
+                                image_data=grid,
+                                name="generated_imgs",
+                                image_scale=(64,64)
+                            )
+                        except Exception as e:
+                            print(e)
                         
-                        self.experiment.log_histogram_3d(weights, step=epoch+1)
-                    except:
-                        pass
+                        try:
+                            weights = []
+                            for name in self.generator.named_parameters():
+                                if 'weight' in name[0]:
+                                    weight.extend(name[1].cpu().detach().numpy().tolist())
+                            
+                            self.experiment.log_histogram_3d(weights, step=epoch+1)
+                        except Exception as e:
+                            print(e)
         else:
             for epoch in range(self.num_epochs):
                 with tqdm(self.dataloader, unit="batch") as tepoch:
@@ -564,7 +550,7 @@ def main(hparams):
     SEED = 1998
     
     trainer = SketchCityTrainer(
-        3,256,1,SEED
+        3,32,1,SEED
     )
     
     trainer.run()
