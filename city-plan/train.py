@@ -26,7 +26,6 @@ class SketchCityTrainer():
     def __init__(
         self, 
         channels: int,
-        img_size: int,
         num_classes: int,
         seed: int,
         num_workers: int = 4,
@@ -45,12 +44,17 @@ class SketchCityTrainer():
         sample_interval: int = 400,
         comet_interval: int = 40,
         comet: bool = True,
+        develop: bool = True,
         *args, 
         **kwargs
     ):
 
         self.SEED = seed
-        self.img_shape = (channels, img_size, img_size)
+        if develop:
+            self.img_shape = (channels, 256, 256)
+        else:
+            self.img_shape = (channels, 512, 512)
+
         self.save_root_dir = save_root_dir
         self.batch_size = batch_size
         self.lambda_gp = lambda_gp
@@ -79,33 +83,8 @@ class SketchCityTrainer():
         torch.manual_seed(self.SEED)
 
         #dataset
-        self.create_dataset(batch_size, img_size, data_dir, num_workers)
+        self.create_dataset(batch_size, self.img_shape[1], data_dir, num_workers)
 
-        # networks
-        gen_modules = [
-            (self.latent_dim, 4, 1, 0),
-            (2048, 4, 2, 1),
-            (1024, 4, 2, 1),
-            (512, 4, 2, 1),
-            (256, 4, 2, 1),
-            (128, 4, 2, 1),
-            (64, 4, 2, 1),
-            (3, 0, 0, 0)
-            #(16, 1, 1, 1),
-            #(3, 0, 0, 0)
-        ]
-        disc_modules = [
-            (3, 4, 2, 1),
-            #(32, 4, 2, 1),
-            (64, 4, 2, 1),
-            (128, 4, 2, 1),
-            (256, 4, 2, 1),
-            (512, 4, 2, 1),
-            (1024, 4, 2, 1),
-            (2048, 4, 1, 0),
-            (1, 0, 0, 0)
-        ]
-        
         if self.comet:
             self.experiment = Experiment(
                 api_key="***REMOVED***",
@@ -123,13 +102,12 @@ class SketchCityTrainer():
                 "latent": self.latent_dim,
                 "number of epochs": self.num_epochs,
                 "sample interval": self.sample_interval,
-                "learing rate": self.lr,
-                "disc structure": disc_modules,
-                "gen structure": gen_modules,
+                "learing rate": self.lr
             })
+        
 
-        self.generator = Generator(channels, self.latent_dim)#Generator(module_list=gen_modules)
-        self.discriminator = Discriminator(channels,num_classes)
+        self.generator = Generator(channels, self.latent_dim, develop=True, residual=True)#Generator(module_list=gen_modules)
+        self.discriminator = Discriminator(channels,num_classes, develop=True, residual=True)
             #classes_num=num_classes,  
             #cnn_list=disc_modules, 
             #batch_size=batch_size,
@@ -576,7 +554,10 @@ def main(hparams):
     SEED = 1998
     
     trainer = SketchCityTrainer(
-        3,512,1,SEED
+        channels=3,
+        num_classes=1,
+        develop=True,
+        seed=SEED
     )
     
     trainer.run()
