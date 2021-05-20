@@ -1,0 +1,37 @@
+generator:
+    latent_dim: 100
+    channels: 3
+    develop: True
+    residual: True
+    shuffle: False
+    activation: 0
+    normalize: 0
+    dropfirst: 0
+    dropsecond: 0.5
+discriminator:
+    channels: 3
+    classes: 1
+    develop: True
+    residual: True
+    down: False
+    minibatch: False
+    activation: 0
+    normalize: 0
+    dropfirst: 0
+    dropsecond: 0.5
+develop: True
+temp_log_dir: './logs'
+data_dir: './generate/'
+channels: 3
+batch_size: 16
+interval_save: 40
+lambda_gp: 10
+n_critic: 5
+lrg: 0.0002
+b1g: 0.9
+b2g: 0.999
+lrc: 0.0002
+b1c: 0.9
+b2c: 0.999
+
+
