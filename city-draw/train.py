@@ -2,6 +2,12 @@
 '''
 Insparied https://librecv.github.io/blog/gans/pytorch/2021/02/13/Pix2Pix-explained-with-code.html
 '''
+import comet_ml
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import CometLogger
+from pytorch_lightning.core import LightningModule
+from pytorch_lightning.trainer import Trainer
+
 import os
 import yaml
 
@@ -11,15 +17,21 @@ from argparse import ArgumentParser, Namespace
 from collections import OrderedDict
 
 import torch
+from torch import nn
 import torchvision
 
 from torch.utils.data import DataLoader
-
-from pytorch_lightning.loggers import CometLogger
-from pytorch_lightning.core import LightningModule
-from pytorch_lightning.trainer import Trainer
+from torch.utils.tensorboard import SummaryWriter
 
 from dataset import DatasetTrain
+from generator import Generator
+from discriminator import Discriminator
+
+from fid_metric import calculate_fid
+from inception_metric import inception_score
+from kid_metric import calculate_kid
+from DISTS_pytorch import DISTS
+
 
 class DrawCityGAN(LightningModule):
     def __init__(self, config_path: str, **kwargs):
@@ -28,14 +40,15 @@ class DrawCityGAN(LightningModule):
         
         super().__init__()
         self.save_hyperparameters(cfg)
+        pl.seed_everything(self.hparams.seed)
         if self.hparams.develop:
-            self.logger.experiment.add_tags(['CityGeneration', "DrawGeneration", "develop"])
+            self.tags = ['CityGeneration', "DrawGeneration", "develop"]
         else:
-            self.logger.experiment.add_tags(['CityGeneration', "DrawGeneration", "production"])
+            self.tags = ['CityGeneration', "DrawGeneration", "production"]
 
         # networks
-        self.generator = Generator(cfg=self.hparams.generator)
-        self.discriminator = Discriminator(cfg=self.hparams.discriminator)
+        self.generator = Generator(config=self.hparams.generator)
+        self.discriminator = Discriminator(config=self.hparams.discriminator)
         
         # loss
         self.adversarial_criterion = nn.BCEWithLogitsLoss()
@@ -46,7 +59,7 @@ class DrawCityGAN(LightningModule):
         else:
             self.img_size = 512
 
-        self.hparams.noise_decrease != 0:
+        if self.hparams.noise_decrease != 0:
             self.noise_img = 1
         else:
             self.noise_img = 0
@@ -65,15 +78,17 @@ class DrawCityGAN(LightningModule):
     def _gen_step(self, real_images, conditioned_images):
         # Pix2Pix has adversarial and a reconstruction loss
         # First calculate the adversarial loss
-        fake_images = self.generator(conditioned_images)
-        disc_logits = self.discriminator(fake_images, conditioned_images)
+        self.fake_images = self.generator(conditioned_images)
+        disc_logits = self.discriminator(self.fake_images, conditioned_images)
         adversarial_loss = self.adversarial_criterion(disc_logits, torch.ones_like(disc_logits))
 
         # calculate reconstruction loss
-        recon_loss = self.recon_criterion(fake_images, real_images)
-        lambda_recon = self.hparams.lambda_recon
-
-        return adversarial_loss + lambda_recon * recon_loss
+        recon_loss = self.recon_criterion(self.fake_images, real_images)
+        #lambda_recon = self.hparams.lambda_recon
+        
+        del disc_logits
+        #return adversarial_loss + lambda_recon * recon_loss
+        return adversarial_loss, recon_loss
 
     def _disc_step(self, real_images, conditioned_images):
         fake_images = self.generator(conditioned_images).detach()
@@ -83,7 +98,10 @@ class DrawCityGAN(LightningModule):
 
         fake_loss = self.adversarial_criterion(fake_logits, torch.zeros_like(fake_logits))
         real_loss = self.adversarial_criterion(real_logits, torch.ones_like(real_logits))
-        return (real_loss + fake_loss) / 2
+        del fake_images, fake_logits, real_logits
+
+        #return (real_loss + fake_loss) / 2
+        return real_loss, fake_loss
     
     def configure_optimizers(self):
         opt_g = torch.optim.Adam(self.generator.parameters(), lr=self.hparams.lrg, betas=(self.hparams.b1g, self.hparams.b2g))
@@ -91,71 +109,93 @@ class DrawCityGAN(LightningModule):
         return opt_d, opt_g
 
     def train_dataloader(self):
-        dataset = DatasetTrain(self.hparams.data)
-        return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True)
+        dataset = DatasetTrain(self.hparams.data, self.hparams.seed)
+        return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.workers, pin_memory=True)
     
-    def training_step(self, batch, batch_idx, optimizer_idx):
-        real, condition = batch
+    def training_step(self, batch, batch_idx):
+        condition, real = batch
 
         # add noise to images
-        noise = torch.empty(real.shape).normal_(mean=0.0,std=1.0)*self.noise_img
-        real = (real+noise.to(self.device)).clamp_(-1,1)
-        condition = (condition+noise.to(self.device)).clamp_(-1,1)
-
-        loss = None
-        if optimizer_idx == 0:
-            loss = self._disc_step(real, condition)
-            log_dict = {'Loss/PatchGAN-Discriminator': loss}
-
-            try:
-                log_dict['FID'] = calculate_fid(fake_imgs.cpu().detach(), imgs.cpu().detach(), False, 2)
-            except:
-                pass
-
-            try:
-                log_dict['IS/mean'], _ = inception_score(fake_imgs.cpu().detach(), cuda=False, batch_size=2)
-            except:
-                pass
-
-            try:
-                log_dict['KID/mean'], _ = calculate_kid(fake_imgs, imgs, 2)
-            except:
-                pass
-
-            if self.dists is not None:
-                try:
-                    with torch.no_grad():
-                        log_dict['DISTS'] = self.dists(fake_imgs, imgs, require_grad=False, batch_average=True)
-                except:
-                    pass
-            
-            self.log_dict(log_dict, prog_bar=True)
-
-        elif optimizer_idx == 1:
-            loss = self._gen_step(real, condition)
-            self.log('Loss/Generator', loss)
+        noise = torch.empty(real.shape, device=self.device).normal_(mean=0.0,std=1.0)*self.noise_img
+        real = (real+noise).clamp_(-1,1)
+        condition = (condition+noise).clamp_(-1,1)
         
-        if self.current_epoch%self.hparams.display_step==0 and batch_idx==0 and optimizer_idx==1:
-            fake = self.gen(condition).detach()
-            grid = torchvision.utils.make_grid(fake)
-            self.temp_logger.add_image('generated_images', grid, 0)
-
-            grid = torchvision.utils.make_grid(condition)
-            self.temp_logger.add_image('condition_images', grid, 0)
-
-            grid = torchvision.utils.make_grid(real)
-            self.temp_logger.add_image('real_images', grid, 0)
+        d_opt, g_opt = self.optimizers()
         
-        self.condition = condition
+        # ----------------
+        # Train generator
+        # ---------------
+        adv, recon = self._gen_step(real, condition)
+        loss = adv + self.hparams.lambda_recon * recon
+        
+        g_opt.zero_grad()
+        self.manual_backward(loss)
+        g_opt.step()
+
+        self.logger.experiment.log_metric('Generator/adverserial_loss', adv, self.global_step, self.current_epoch)
+        self.logger.experiment.log_metric('Generator/reconstrution_loss', recon, self.global_step, self.current_epoch)
+        self.logger.experiment.log_metric('Generator/loss', loss, self.global_step, self.current_epoch)
+        
+        # -------------------
+        # Train discriminator
+        # -------------------
+        real_loss, fake_loss = self._disc_step(real, condition)
+        loss = (real_loss+fake_loss)/2
+
+        d_opt.zero_grad()
+        self.manual_backward(loss)
+        d_opt.step()
+        
+        self.logger.experiment.log_metric('Discriminator/real_loss', real_loss, self.global_step, self.current_epoch)
+        self.logger.experiment.log_metric('Discriminator/fake_loss', fake_loss, self.global_step, self.current_epoch)
+        self.logger.experiment.log_metric('Discriminator/loss', loss, self.global_step, self.current_epoch)
+    
+
+        self.logger.experiment.log_metric('Noise', self.noise_img, self.global_step, self.current_epoch)
+        try:
+            self.logger.experiment.log_metric('FID', calculate_fid(self.fake_images, real.detach(), False, 1), self.global_step, self.current_epoch)
+        except Exception as e:
+            print(f"Exception in fid metric {e}")
+        try:
+            self.logger.experiment.log_metric('IS/mean', inception_score(self.fake_images, cuda=False, batch_size=1)[0], self.global_step, self.current_epoch)
+        except Exception as e:
+            print(f"Exception in IS metric {e}")
+        try:
+            self.logger.experiment.log_metric('KID/mean', calculate_kid(self.fake_images, real.detach(), 1)[0], self.global_step, self.current_epoch)
+        except Exception as e:
+            print(f"Exception in kid metric {e}")
+        if self.dists is not None:
+            try:
+                with torch.no_grad():
+                    self.logger.experiment.log_metric('DISTS', self.dists(self.fake_images, real.detach(), require_grad=False, batch_average=True), self.global_step, self.current_epoch)
+            except Exception as e:
+                print(f"Exception in dists metric {e}")
+
+        if self.global_step%self.hparams.display_step==0 and self.hparams.display_show:
+            grid = torchvision.utils.make_grid(self.fake_images[:4])
+            self.temp_logger.add_image('generated_images', grid, self.global_step)
+
+            grid = torchvision.utils.make_grid(condition[:4].detach())
+            self.temp_logger.add_image('condition_images', grid, self.global_step)
+
+            grid = torchvision.utils.make_grid(real[:4].detach())
+            self.temp_logger.add_image('real_images', grid, self.global_step)
+        
         return loss
 
     def on_epoch_end(self):
         self.noise_img -= self.hparams.noise_decrease
-        if self.current_epoch % self.hparams.interval_save == 0:
-            fake = self.gen(self.condition).detach()
-            grid = torchvision.utils.make_grid(sample_imgs).mul(0.5).add(0.5).cpu().permute(1,2,0).detach().numpy()
+        if self.noise_img < 0:
+            self.noise_img = 0
+
+        if self.tags is not None:
+            self.logger.experiment.add_tags(self.tags)
+            self.tags = None
+
+        if self.current_epoch % self.hparams.interval_save == 0 and self.hparams.interval_show:
+            grid = torchvision.utils.make_grid(self.fake_images[:4]).mul(0.5).add(0.5).cpu().permute(1,2,0).numpy()
             try:
-                self.logger.experiment.log_image('generated_images', grid, self.current_epoch)
+                self.logger.experiment.log_image(grid, name='generated_images', step=self.current_epoch)
             except Exception as e:
                 print(e)
             
@@ -191,7 +231,7 @@ def main(args: Namespace) -> None:
     # ------------------------
     # If use distubuted training  PyTorch recommends to use DistributedDataParallel.
     # See: https://pytorch.org/docs/stable/nn.html#torch.nn.DataParallel
-    trainer = Trainer(logger=CometLogger, gpus=args.gpus)
+    trainer = Trainer(logger=comet_logger, gpus=args.gpus, max_epochs=args.epochs)
 
     # ------------------------
     # 3 START TRAINING
@@ -201,7 +241,8 @@ def main(args: Namespace) -> None:
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument("--gpus", type=int, default=0, help="number of GPUs")
+    parser.add_argument("--gpus", type=int, default=1, help="number of GPUs")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
     parser.add_argument("--config_path", type=str, default="config.yaml", help="config path")
 
     hparams = parser.parse_args()

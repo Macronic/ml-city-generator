@@ -1,6 +1,8 @@
 #!/bin/python
 import torch
 import torch.nn as nn
+
+from easydict import EasyDict as edict
 # Discriminator Code
 
 
@@ -76,7 +78,6 @@ class ResidualBlock(nn.Module):
             pad=1
         elif padding_type == 1:
             self.pad1 = nn.ReflectionPad2d(1)
-            layers.append()
             pad = 0
         elif padding_type == 2:
             self.pad1 = nn.ReplicationPad2d(1)
@@ -85,12 +86,12 @@ class ResidualBlock(nn.Module):
         self.conv1 = nn.Conv2d(in_channels, in_channels, 3, padding=pad)
         
         if normalize == 0:
-            self.bn1 = nn.InstanceNorm2d(out_channels, affine=True)
+            self.bn1 = nn.InstanceNorm2d(in_channels, affine=True)
         elif normalize == 1:
             self.bn1 = None
             self.conv1 = torch.nn.utils.spectral_norm(self.conv1)
         elif normalize == 2:
-            self.bn1 = nn.BatchNorm2d(out_channels, affine=True)
+            self.bn1 = nn.BatchNorm2d(in_channels, affine=True)
         
         if relu == 0:
             self.relu = nn.LeakyReLU(0.2, inplace=True)
@@ -102,7 +103,6 @@ class ResidualBlock(nn.Module):
             pad=1
         elif padding_type == 1:
             self.pad2 = nn.ReflectionPad2d(1)
-            layers.append()
             pad = 0
         elif padding_type == 2:
             self.pad2 = nn.ReplicationPad2d(1)
@@ -111,12 +111,12 @@ class ResidualBlock(nn.Module):
         self.conv2 = nn.Conv2d(in_channels, in_channels, 3, padding=pad)
 
         if normalize == 0:
-            self.bn2 = nn.InstanceNorm2d(out_channels, affine=True)
+            self.bn2 = nn.InstanceNorm2d(in_channels, affine=True)
         elif normalize == 1:
             self.bn2 = None
             self.conv2 = torch.nn.utils.spectral_norm(self.conv1)
         elif normalize == 2:
-            self.bn2 = nn.BatchNorm2d(out_channels, affine=True)
+            self.bn2 = nn.BatchNorm2d(in_channels, affine=True)
 
     def forward(self, x):
         residual = x
@@ -144,7 +144,8 @@ class ResidualBlock(nn.Module):
 class Discriminator(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.config = config
+        self.config = edict(config)
+        config = self.config
 
         if config.develop:
             if config.down and config.residual:
@@ -170,7 +171,7 @@ class Discriminator(torch.nn.Module):
                     ResidualBlock(512, config.normalize, config.activation, config.padingtype)
                 )
                 # Image (512x4x4)
-                self.final = nn.Conv2d(in_channels=512, out_channels=config.classes, kernel_size=1)
+                self.final = nn.Conv2d(in_channels=512, out_channels=1, kernel_size=1)
                 # Out Image (Cx4x4)
 
             elif config.residual:
@@ -193,10 +194,13 @@ class Discriminator(torch.nn.Module):
 
                     # Image (256x8x8)
                     DownConBlock(256, 512, 4, 2, 1, config.dropfirst, config.normalize, config.activation, config.padingtype),
-                    ResidualBlock(512, config.normalize, config.activation, config.padingtype)
+                    ResidualBlock(512, config.normalize, config.activation, config.padingtype),
                 )
                 # Image (512x4x4)
-                self.final = nn.Conv2d(in_channels=512, out_channels=config.classes, kernel_size=1)
+                self.final = nn.Sequential(
+                        nn.ZeroPad2d((1,0,1,0)),
+                        nn.Conv2d(512, 1, 4, padding=1, bias=False)
+                )
                 # Out Image (Cx4x4)
             else:
                 self.main = nn.Sequential(
@@ -216,7 +220,7 @@ class Discriminator(torch.nn.Module):
                     DownConBlock(256, 512, 4, 2, 1, config.dropfirst, config.normalize, config.activation, config.padingtype)
                 )
                 # Image (512x4x4)
-                self.final = nn.Conv2d(in_channels=512, out_channels=config.classes, kernel_size=1)
+                self.final = nn.Conv2d(in_channels=512, out_channels=1, kernel_size=1)
                 # Out Image (Cx4x4)
         else:
             self.main = nn.Sequential(
@@ -239,12 +243,11 @@ class Discriminator(torch.nn.Module):
                 DownConBlock(512, 512, 4, 2, 1, config.dropsecond, config.normalize, config.activation, config.padingtype)
             )
             # Image (512x4x4)
-            self.final = nn.Conv2d(in_channels=512, out_channels=config.classes, kernel_size=1)
+            self.final = nn.Conv2d(in_channels=512, out_channels=1, kernel_size=1)
             # Out Image (Cx4x4)
     
     def forward(self, x, y):
         x = torch.cat([x, y], axis=1)
         x = self.main(x)
         x = self.final(x)
-
         return x

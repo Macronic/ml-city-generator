@@ -7,18 +7,22 @@ import torchvision.transforms.functional as TF
 
 from PIL import Image
 import os
+import random
+
+from easydict import EasyDict as edict
 
 
 class DatasetTrain(torch.utils.data.Dataset):
-    def __init__(self, cfg: str):
-        self.cfg = cfg
+    def __init__(self, cfg: str, seed: int):
+        self.cfg = edict(cfg)
+        random.seed(seed)
         self.image_paths = []
         self.target_paths = []
 
         self.map = []
-        for folder in os.listdir(cfg.dataset):
+        for folder in os.listdir(self.cfg.dataset):
             if 'map' in folder:
-                self.map.append(os.path.join(cfg.dataset, folder))
+                self.map.append(os.path.join(self.cfg.dataset, folder))
         
         for mape in self.map:
             for maper in os.listdir(mape):
@@ -26,7 +30,7 @@ class DatasetTrain(torch.utils.data.Dataset):
                     satelite = mape.replace('map', 'satelitte')
                     sateliter = maper.replace('png', 'jpg')
                     condtion = os.path.join(satelite, sateliter)
-                    if os.exists(condtion):
+                    if os.path.exists(condtion):
                         self.image_paths.append(os.path.join(mape, maper))
                         self.target_paths.append(condtion)
         
@@ -62,18 +66,18 @@ class DatasetTrain(torch.utils.data.Dataset):
         mask = TF.to_tensor(mask)
 
         #normalize
-        if self.cfg.channels = 3:
-            image = TF.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            mask = TF.normalize(mask, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        elif self.cfg.channels = 1:
-            image = TF.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        if self.cfg.channels == 3:
+            image = TF.normalize(image, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            mask = TF.normalize(mask, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        elif self.cfg.channels == 1:
+            image = TF.normalize(image, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             mask = TF.normalize(mask, mean=[0.5], std=[0.5])
 
         return image, mask
 
     def __getitem__(self, index):
-        image = Image.open(self.image_paths[index])
-        mask = Image.open(self.target_paths[index])
+        image = Image.open(self.image_paths[index]).convert("RGB")
+        mask = Image.open(self.target_paths[index]).convert("RGB")
         x, y = self.transform(image, mask)
         return x, y
 
