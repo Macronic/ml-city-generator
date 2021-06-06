@@ -6,8 +6,11 @@ from torchvision import transforms
 import torchvision.transforms.functional as TF
 
 from PIL import Image
+import matplotlib.pyplot as plt
+
 import os
 import random
+import yaml
 
 from easydict import EasyDict as edict
 
@@ -84,4 +87,22 @@ class DatasetTrain(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.image_paths)
     
+
+if __name__=="__main__":
+    with open("config.yaml", "r") as f:
+        cfg = yaml.safe_load(f)
+
+    dataset = DatasetTrain(cfg['data'], cfg['seed'])
+    figure = plt.figure(figsize=(8, 8))
+    cols, rows = 3, 3
+    for i in range(1, cols * rows + 1):
+        sample_idx = torch.randint(len(dataset), size=(1,)).item()
+        condition, real = dataset[sample_idx]
+        figure.add_subplot(rows, cols, i)
+        plt.title("REAL")
+        plt.axis("off")
+        plt.imshow(real.squeeze().mul(0.5).add(0.5).cpu().permute(1,2,0).numpy())
+    
+    #plt.savefig("sample_loader.png")
+    plt.show()
 

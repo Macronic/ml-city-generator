@@ -92,7 +92,9 @@ class ResidualBlock(nn.Module):
             self.conv1 = torch.nn.utils.spectral_norm(self.conv1)
         elif normalize == 2:
             self.bn1 = nn.BatchNorm2d(in_channels, affine=True)
-        
+        else:
+            self.bn1 = None
+
         if relu == 0:
             self.relu = nn.LeakyReLU(0.2, inplace=True)
         elif relu == 1:
@@ -117,6 +119,8 @@ class ResidualBlock(nn.Module):
             self.conv2 = torch.nn.utils.spectral_norm(self.conv1)
         elif normalize == 2:
             self.bn2 = nn.BatchNorm2d(in_channels, affine=True)
+        else:
+            self.bn2 = None
 
     def forward(self, x):
         residual = x
@@ -177,30 +181,32 @@ class Discriminator(torch.nn.Module):
             elif config.residual:
                 self.main = nn.Sequential(
                     # Image (Cx128x128)
-                    DownConBlock(config.in_channels, 32, 4, 2, 1, config.dropfirst, 3, config.activation, config.padingtype),
-                    ResidualBlock(32, config.normalize, config.activation, config.padingtype),
+                    DownConBlock(config.in_channels, 64, 4, 2, 1, 0.0, 3, config.activation, config.padingtype),
+                    ResidualBlock(64, 3, config.activation, config.padingtype),
 
-                    # Image (32x64x64)
-                    DownConBlock(32, 64, 4, 2, 1, config.dropsecond, config.normalize, config.activation, config.padingtype),
-                    ResidualBlock(64, config.normalize, config.activation, config.padingtype),
-
-                    # Image (64x32x32)
-                    DownConBlock(64, 128, 4, 2, 1, config.dropfirst, config.normalize, config.activation, config.padingtype),
+                    # Image (64x64x64)
+                    DownConBlock(64, 128, 4, 2, 1, 0.0, config.normalize, config.activation, config.padingtype),
                     ResidualBlock(128, config.normalize, config.activation, config.padingtype),
 
-                    # Image (128x16x16)
-                    DownConBlock(128, 256, 4, 2, 1, config.dropsecond, config.normalize, config.activation, config.padingtype),
+                    # Image (128x32x32)
+                    DownConBlock(128, 256, 4, 2, 1, 0.0, config.normalize, config.activation, config.padingtype),
                     ResidualBlock(256, config.normalize, config.activation, config.padingtype),
 
-                    # Image (256x8x8)
-                    DownConBlock(256, 512, 4, 2, 1, config.dropfirst, config.normalize, config.activation, config.padingtype),
+                    # Image (256x16x16)
+                    DownConBlock(256, 512, 4, 2, 1, 0.0, config.normalize, config.activation, config.padingtype),
                     ResidualBlock(512, config.normalize, config.activation, config.padingtype),
+
+                    # Image (512x8x8)
+                    #DownConBlock(512, 512, 4, 2, 1, 0.0, config.normalize, config.activation, config.padingtype),
+                    #ResidualBlock(512, config.normalize, config.activation, config.padingtype)
                 )
                 # Image (512x4x4)
-                self.final = nn.Sequential(
-                        nn.ZeroPad2d((1,0,1,0)),
-                        nn.Conv2d(512, 1, 4, padding=1, bias=False)
-                )
+                # Image (512x8x8)
+                self.final = nn.Sequential(nn.Conv2d(512, 1, 4, padding=1), nn.Sigmoid())
+                #self.final = nn.Sequential(
+                #        nn.ZeroPad2d((1,0,1,0)),
+                #        nn.Conv2d(512, 1, 4, padding=1, bias=False)
+                #)
                 # Out Image (Cx4x4)
             else:
                 self.main = nn.Sequential(

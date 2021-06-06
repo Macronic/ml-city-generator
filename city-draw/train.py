@@ -116,9 +116,9 @@ class DrawCityGAN(LightningModule):
         condition, real = batch
 
         # add noise to images
-        noise = torch.empty(real.shape, device=self.device).normal_(mean=0.0,std=1.0)*self.noise_img
-        real = (real+noise).clamp_(-1,1)
-        condition = (condition+noise).clamp_(-1,1)
+        #noise = torch.empty(real.shape, device=self.device).normal_(mean=0.0,std=1.0)*self.noise_img
+        #real = (real+noise).clamp_(-1,1)
+        #condition = (condition+noise).clamp_(-1,1)
         
         d_opt, g_opt = self.optimizers()
         
@@ -172,13 +172,13 @@ class DrawCityGAN(LightningModule):
                 print(f"Exception in dists metric {e}")
 
         if self.global_step%self.hparams.display_step==0 and self.hparams.display_show:
-            grid = torchvision.utils.make_grid(self.fake_images[:4])
+            grid = torchvision.utils.make_grid(self.fake_images[:4]).mul(0.5).add(0.5)
             self.temp_logger.add_image('generated_images', grid, self.global_step)
 
-            grid = torchvision.utils.make_grid(condition[:4].detach())
+            grid = torchvision.utils.make_grid(condition[:4].detach()).mul(0.5).add(0.5)
             self.temp_logger.add_image('condition_images', grid, self.global_step)
 
-            grid = torchvision.utils.make_grid(real[:4].detach())
+            grid = torchvision.utils.make_grid(real[:4].detach()).mul(0.5).add(0.5)
             self.temp_logger.add_image('real_images', grid, self.global_step)
         
         return loss

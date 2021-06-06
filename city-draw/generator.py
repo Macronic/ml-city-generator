@@ -156,6 +156,8 @@ class ResidualBlock(nn.Module):
             self.conv1 = torch.nn.utils.spectral_norm(self.conv1)
         elif normalize == 2:
             self.bn1 = nn.BatchNorm2d(in_channels, affine=True)
+        else:
+            self.bn1 = None
         
         if relu == 0:
             self.relu = nn.LeakyReLU(0.2, inplace=True)
@@ -181,6 +183,8 @@ class ResidualBlock(nn.Module):
             self.conv2 = torch.nn.utils.spectral_norm(self.conv1)
         elif normalize == 2:
             self.bn2 = nn.BatchNorm2d(out_channels, affine=True)
+        else:
+            self.bn2 = None
 
     def forward(self, x):
         residual = x
@@ -246,31 +250,31 @@ class Generator(torch.nn.Module):
             elif config.residual:
                 self.encoders = nn.Sequential(
                     # Image (Cx128x128)
-                    DownConBlock(config.in_channels, 32, 4, 2, 1, config.dropfirst_encoder, 3, config.activation_encoder, config.padingtype_encoder),
-                    ResidualBlock(32, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
+                    DownConBlock(config.in_channels, 64, 4, 2, 1, 0.0, 3, config.activation_encoder, config.padingtype_encoder),
+                    ResidualBlock(64, 3, config.activation_encoder, config.padingtype_encoder),
 
-                    # Image (32x64x64)
-                    DownConBlock(32, 64, 4, 2, 1, config.dropsecond_encoder, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
-                    ResidualBlock(64, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
-
-                    # Image (64x32x32)
-                    DownConBlock(64, 128, 4, 2, 1, config.dropfirst_encoder, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
+                    # Image (64x64x64)
+                    DownConBlock(64, 128, 4, 2, 1, 0.0, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
                     ResidualBlock(128, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
 
-                    # Image (128x16x16)
-                    DownConBlock(128, 256, 4, 2, 1, config.dropsecond_encoder, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
+                    # Image (128x32x32)
+                    DownConBlock(128, 256, 4, 2, 1, 0.0, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
                     ResidualBlock(256, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
 
-                    # Image (256x8x8)
-                    DownConBlock(256, 512, 4, 2, 1, config.dropfirst_encoder, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
+                    # Image (256x16x16)
+                    DownConBlock(256, 512, 4, 2, 1, 0.0, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
+                    ResidualBlock(512, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
+
+                    # Image (512x8x8)
+                    DownConBlock(512, 512, 4, 2, 1, 0.0, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
                     ResidualBlock(512, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
 
                     # Image (512x4x4)
-                    DownConBlock(512, 512, 4, 2, 1, config.dropsecond_encoder, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
+                    DownConBlock(512, 512, 4, 2, 1, 0.0, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
                     ResidualBlock(512, config.normalize_encoder, config.activation_encoder, config.padingtype_encoder),
 
                     # Image (512x2x2)
-                    DownConBlock(512, 512, 4, 2, 1, config.dropfirst_encoder, 3, config.activation_encoder, config.padingtype_encoder)
+                    DownConBlock(512, 512, 4, 2, 1, 0.0, 3, 1, config.padingtype_encoder)
                     # Out Image (512x1x1)
                 )
             else:
@@ -331,35 +335,36 @@ class Generator(torch.nn.Module):
             elif config.residual:
                 self.decoders = nn.Sequential(
                     # Image (512x1x1)
-                    UpBlock(512, 512, 2, 1, 0, config.bias_decoder, config.dropfirst_decoder, config.normalize_decoder, config.activation_decoder),
+                    UpBlock(512, 512, 2, 1, 0, config.bias_decoder, 0.5, config.normalize_decoder, config.activation_decoder),
                     ResidualBlock(512, config.normalize_decoder, config.activation_decoder, config.padingtype_encoder),
 
                     # Image (1024x2x2)
-                    UpBlock(1024, 512, 4, 2, 1, config.bias_decoder, config.dropsecond_decoder, config.normalize_decoder, config.activation_decoder),
+                    UpBlock(1024, 512, 4, 2, 1, config.bias_decoder, 0.5, config.normalize_decoder, config.activation_decoder),
                     ResidualBlock(512, config.normalize_decoder, config.activation_decoder, config.padingtype_encoder),
 
                     # Image (1024x4x4)
-                    UpBlock(1024, 256, 4, 2, 1, config.bias_decoder, config.dropfirst_decoder, config.normalize_decoder, config.activation_decoder),
+                    UpBlock(1024, 512, 4, 2, 1, config.bias_decoder, 0.5, config.normalize_decoder, config.activation_decoder),
+                    ResidualBlock(512, config.normalize_decoder, config.activation_decoder, config.padingtype_encoder),
+
+                    # Image (1024x8x8)
+                    UpBlock(1024, 256, 4, 2, 1, config.bias_decoder, 0.0, config.normalize_decoder, config.activation_decoder),
                     ResidualBlock(256, config.normalize_decoder, config.activation_decoder, config.padingtype_encoder),
 
-                    # Image (512x8x8)
-                    UpBlock(512, 128, 4, 2, 1, config.bias_decoder, config.dropsecond_decoder, config.normalize_decoder, config.activation_decoder),
+                    # Image (512x16x16)
+                    UpBlock(512, 128, 4, 2, 1, config.bias_decoder, 0.0, config.normalize_decoder, config.activation_decoder),
                     ResidualBlock(128, config.normalize_decoder, config.activation_decoder, config.padingtype_encoder),
 
-                    # Image (256x16x16)
-                    UpBlock(256, 64, 4, 2, 1, config.bias_decoder, config.dropfirst_decoder, config.normalize_decoder, config.activation_decoder),
+                    # Image (256x32x32)
+                    UpBlock(256, 64, 4, 2, 1, config.bias_decoder, 0.0, config.normalize_decoder, config.activation_decoder),
                     ResidualBlock(64, config.normalize_decoder, config.activation_decoder, config.padingtype_encoder),
 
-                    # Image (128x32x32)
-                    UpBlock(128, 32, 4, 2, 1, config.bias_decoder, config.dropsecond_decoder, config.normalize_decoder, config.activation_decoder),
-                    ResidualBlock(32, config.normalize_decoder, config.activation_decoder, config.padingtype_encoder),
-
-                    # Image (64x64x64)
-                    nn.Sequential(
-                        nn.Upsample(scale_factor=2),
-                        nn.ZeroPad2d((1,0,1,0)),
-                        nn.Conv2d(64, config.out_channels, 4, padding=1)
-                    )
+                    # Image (128x64x64)
+                    nn.ConvTranspose2d(128, config.out_channels, 4, 2, 1)
+                    #nn.Sequential(
+                    #    nn.Upsample(scale_factor=2),
+                    #    nn.ZeroPad2d((1,0,1,0)),
+                    #    nn.Conv2d(64, config.out_channels, 4, padding=1)
+                    #)
                     #UpBlock(64, config.out_channels, 4, 2, 1, config.bias_decoder, config.dropfirst_decoder, config.normalize_decoder, config.activation_decoder)
                     # Out Image (Cx128x128)
                 )
