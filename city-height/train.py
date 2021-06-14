@@ -33,7 +33,7 @@ from kid_metric import calculate_kid
 from DISTS_pytorch import DISTS
 
 
-class DrawCityGAN(LightningModule):
+class DrawHeightGAN(LightningModule):
     def __init__(self, config_path: str, **kwargs):
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
@@ -42,9 +42,9 @@ class DrawCityGAN(LightningModule):
         self.save_hyperparameters(cfg)
         pl.seed_everything(self.hparams.seed)
         if self.hparams.develop:
-            self.tags = ['CityGeneration', "DrawGeneration", "develop"]
+            self.tags = ['CityGeneration', "HeightGeneration", "develop"]
         else:
-            self.tags = ['CityGeneration', "DrawGeneration", "production"]
+            self.tags = ['CityGeneration', "HeightGeneration", "production"]
 
         # networks
         self.generator = Generator(config=self.hparams.generator)
@@ -55,7 +55,7 @@ class DrawCityGAN(LightningModule):
         self.recon_criterion = nn.L1Loss()
 
         if self.hparams.develop:
-            self.img_size = 256
+            self.img_size = 128
         else:
             self.img_size = 512
 
@@ -112,6 +112,9 @@ class DrawCityGAN(LightningModule):
         dataset = DatasetTrain(self.hparams.data, self.hparams.seed)
         return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.workers, pin_memory=True)
     
+    def convert_to_three_channels(self, batch):
+        return torch.squeeze(torch.squeeze(torch.stack((batch,)*3, dim=2), dim=2), dim=1)
+    
     def training_step(self, batch, batch_idx):
         condition, real = batch
 
@@ -151,19 +154,21 @@ class DrawCityGAN(LightningModule):
         self.logger.experiment.log_metric('Discriminator/loss', loss, self.global_step, self.current_epoch)
     
 
+        fake_3ch = self.convert_to_three_channels(self.fake_images)
+        real_3ch = self.convert_to_three_channels(real).detach()
         self.logger.experiment.log_metric('Noise', self.noise_img, self.global_step, self.current_epoch)
+        #try:
+        #    self.logger.experiment.log_metric('FID', calculate_fid(fake_3ch, real_3ch, False, 1), self.global_step, self.current_epoch)
+        #except Exception as e:
+        #    print(f"Exception in FID metric {e}")
         try:
-            self.logger.experiment.log_metric('FID', calculate_fid(self.fake_images, real.detach(), False, 1), self.global_step, self.current_epoch)
-        except Exception as e:
-            print(f"Exception in fid metric {e}")
-        try:
-            self.logger.experiment.log_metric('IS/mean', inception_score(self.fake_images, cuda=False, batch_size=1)[0], self.global_step, self.current_epoch)
+            self.logger.experiment.log_metric('IS/mean', inception_score(fake_3ch, cuda=False, batch_size=1)[0], self.global_step, self.current_epoch)
         except Exception as e:
             print(f"Exception in IS metric {e}")
         try:
-            self.logger.experiment.log_metric('KID/mean', calculate_kid(self.fake_images, real.detach(), 1)[0], self.global_step, self.current_epoch)
+           self.logger.experiment.log_metric('KID/mean', calculate_kid(fake_3ch, real_3ch, 1)[0], self.global_step, self.current_epoch)
         except Exception as e:
-            print(f"Exception in kid metric {e}")
+            print(f"Exception in KID metric {e}")
         if self.dists is not None:
             try:
                 with torch.no_grad():
@@ -215,7 +220,7 @@ def main(args: Namespace) -> None:
     # ------------------------
     # 1 INIT LIGHTNING MODEL
     # ------------------------
-    model = DrawCityGAN(config_path=args.config_path)
+    model = DrawHeightGAN(config_path=args.config_path)
 
     # ------------------------
     # 2 INIT LOGGER 
