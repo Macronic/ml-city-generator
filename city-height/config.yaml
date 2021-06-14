@@ -1,0 +1,51 @@
+generator:
+    develop: True
+    down: False
+    residual: True
+    in_channels: 3
+    dropfirst_encoder: 0
+    dropsecond_encoder: 0.5
+    normalize_encoder: 0
+    activation_encoder: 0
+    padingtype_encoder: 1
+    shuffle: False
+    out_channels: 1
+    bias_decoder: False
+    dropfirst_decoder: 0
+    dropsecond_decoder: 0.5
+    normalize_decoder: 0
+    activation_decoder: 0
+
+discriminator:
+    in_channels: 4
+    develop: True
+    residual: True
+    down: False
+    activation: 0
+    normalize: 0
+    dropfirst: 0
+    dropsecond: 0.5
+    padingtype: 1
+
+data:
+    dataset: './generate'
+    channels: 1
+    develop: True
+
+develop: True
+seed: 2020
+temp_log_dir: './logs'
+workers: 4
+batch_size: 8
+interval_save: 20
+interval_show: False
+display_step: 100
+display_show: True
+lambda_recon: 100
+noise_decrease: 0
+lrg: 0.0002
+b1g: 0.9
+b2g: 0.999
+lrd: 0.0002
+b1d: 0.9
+b2d: 0.999
