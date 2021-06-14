@@ -236,7 +236,7 @@ def main(args: Namespace) -> None:
     # 2 INIT LOGGER 
     # ------------------------
     comet_logger = CometLogger(
-        api_key="***REMOVED***",
+        api_key="",
         project_name="citygeneration",
         workspace="wolodja"
     )
